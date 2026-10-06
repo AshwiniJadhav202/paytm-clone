@@ -3,12 +3,16 @@
 import { useEffect, useState } from "react";
 
 type BankAccount = {
-  id: number;
-  bankName: string;
-  accountHolder: string;
-  accountNumber: string;
-  balance: number;
-  isVerified: boolean;
+    id: number;
+    bankName: string;
+    maskedAccount: string;
+    ifsc: string | null;
+    provider: string;
+    providerRef: string;
+    status: string;
+    isPrimary: boolean;
+    createdAt: string;
+    updatedAt: string;
 };
 
 export default function AddMoneyPage() {
@@ -109,7 +113,7 @@ export default function AddMoneyPage() {
           {accounts.map((account) => (
             <option key={account.id} value={account.id}>
               {account.bankName} - XXXX
-              {account.accountNumber.slice(-4)}
+              {account.maskedAccount.slice(-4)}
             </option>
           ))}
         </select>

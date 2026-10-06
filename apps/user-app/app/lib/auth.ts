@@ -162,35 +162,25 @@ export const authOptions = {
           const randomNumber =
             `google_${crypto.randomUUID()}`;
 
-          // Create User + Balance atomically
+          /*
+           * User.balance has a default value
+           * in the current Prisma schema.
+           *
+           * Therefore, we no longer create a
+           * separate Balance record.
+           */
           existingUser =
-            await db.$transaction(
-              async (tx) => {
-                const newUser =
-                  await tx.user.create({
-                    data: {
-                      email,
-                      name:
-                        user.name ||
-                        "Google User",
-                      number: randomNumber,
-                      password:
-                        hashedPassword,
-                    },
-                  });
-
-                // Create wallet
-                await tx.balance.create({
-                  data: {
-                    userId: newUser.id,
-                    amount: 0,
-                    locked: 0,
-                  },
-                });
-
-                return newUser;
-              }
-            );
+            await db.user.create({
+              data: {
+                email,
+                name:
+                  user.name ||
+                  "Google User",
+                number: randomNumber,
+                password:
+                  hashedPassword,
+              },
+            });
 
           console.log(
             "New Google user created:",

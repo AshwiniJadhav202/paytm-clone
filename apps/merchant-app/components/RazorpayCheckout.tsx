@@ -1,4 +1,3 @@
-
 "use client";
 
 import { useState } from "react";
@@ -11,10 +10,16 @@ declare global {
 
 type RazorpayCheckoutProps = {
   amount: number;
+  orderId?: string;
+  merchantName?: string;
+  description?: string;
 };
 
 export default function RazorpayCheckout({
   amount,
+  orderId,
+  merchantName = "Paytm Clone",
+  description = "Payment",
 }: RazorpayCheckoutProps) {
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
@@ -44,83 +49,83 @@ export default function RazorpayCheckout({
       setLoading(true);
       setMessage("");
 
-      // Validate amount
       if (!amount || amount <= 0) {
-        setMessage("Please enter a valid amount");
+        setMessage("Invalid payment amount");
         return;
       }
 
-      // Load Razorpay checkout script
-      const scriptLoaded = await loadRazorpayScript();
+      // --------------------------------------------------
+      // For payment requests we MUST already have
+      // a real Razorpay order ID.
+      // --------------------------------------------------
+
+      if (!orderId) {
+        setMessage(
+          "Razorpay order is not available"
+        );
+        return;
+      }
+
+      const scriptLoaded =
+        await loadRazorpayScript();
 
       if (!scriptLoaded) {
-        setMessage("Razorpay Checkout failed to load");
+        setMessage(
+          "Razorpay Checkout failed to load"
+        );
         return;
       }
 
-      // Create Razorpay order
-      const response = await fetch("/api/razorpay/order", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          amount,
-        }),
-      });
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        setMessage(data.message || "Order creation failed");
-        return;
-      }
-
-      // Razorpay checkout options
       const options = {
-        key: process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID,
+        key:
+          process.env
+            .NEXT_PUBLIC_RAZORPAY_KEY_ID,
 
-        amount: data.order.amount,
+        amount: Math.round(amount * 100),
 
-        currency: data.order.currency,
+        currency: "INR",
 
-        name: "Paytm Clone",
+        name: merchantName,
 
-        description: "Test Payment",
+        description,
 
-        order_id: data.order.id,
+        order_id: orderId,
 
-        // Handle successful payment
-        handler: async function (paymentResponse: any) {
+        handler: async function (
+          paymentResponse: any
+        ) {
           try {
-            setMessage("Verifying payment...");
-
-            // Send payment details to backend
-            const verifyResponse = await fetch(
-              "/api/razorpay/verify",
-              {
-                method: "POST",
-
-                headers: {
-                  "Content-Type": "application/json",
-                },
-
-                body: JSON.stringify({
-                  razorpay_order_id:
-                    paymentResponse.razorpay_order_id,
-
-                  razorpay_payment_id:
-                    paymentResponse.razorpay_payment_id,
-
-                  razorpay_signature:
-                    paymentResponse.razorpay_signature,
-                }),
-              }
+            setMessage(
+              "Verifying payment..."
             );
 
-            const verifyData = await verifyResponse.json();
+            const verifyResponse =
+              await fetch(
+                "/api/razorpay/verify",
+                {
+                  method: "POST",
 
-            // Check verification response
+                  headers: {
+                    "Content-Type":
+                      "application/json",
+                  },
+
+                  body: JSON.stringify({
+                    razorpay_order_id:
+                      paymentResponse.razorpay_order_id,
+
+                    razorpay_payment_id:
+                      paymentResponse.razorpay_payment_id,
+
+                    razorpay_signature:
+                      paymentResponse.razorpay_signature,
+                  }),
+                }
+              );
+
+            const verifyData =
+              await verifyResponse.json();
+
             if (
               !verifyResponse.ok ||
               !verifyData.success
@@ -133,13 +138,12 @@ export default function RazorpayCheckout({
               return;
             }
 
-            // Payment successfully verified
             setMessage(
-              "Payment verified successfully! ✅"
+              "Payment successful! ✓"
             );
 
             console.log(
-              "Verified Payment Details:",
+              "Verified Payment:",
               verifyData
             );
           } catch (error) {
@@ -154,23 +158,22 @@ export default function RazorpayCheckout({
           }
         },
 
-        // Razorpay theme
         theme: {
           color: "#3399cc",
         },
 
-        // When payment window is closed
         modal: {
           ondismiss: function () {
-            setMessage("Payment window closed");
+            setMessage(
+              "Payment window closed"
+            );
           },
         },
       };
 
-      // Create Razorpay instance
-      const razorpay = new window.Razorpay(options);
+      const razorpay =
+        new window.Razorpay(options);
 
-      // Handle payment failure
       razorpay.on(
         "payment.failed",
         function (response: any) {
@@ -186,12 +189,16 @@ export default function RazorpayCheckout({
         }
       );
 
-      // Open Razorpay checkout
       razorpay.open();
     } catch (error) {
-      console.error("Checkout Error:", error);
+      console.error(
+        "Checkout Error:",
+        error
+      );
 
-      setMessage("Something went wrong");
+      setMessage(
+        "Something went wrong"
+      );
     } finally {
       setLoading(false);
     }
@@ -207,7 +214,9 @@ export default function RazorpayCheckout({
       >
         {loading
           ? "Opening Checkout..."
-          : `Pay ₹${amount}`}
+          : `Pay ₹${amount.toLocaleString(
+              "en-IN"
+            )}`}
       </button>
 
       {message && (

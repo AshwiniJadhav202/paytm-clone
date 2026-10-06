@@ -1,4 +1,3 @@
-
 import prisma from "@repo/db/client";
 import LogoutButton from "./LogoutButton";
 import PaymentRequestForm from "./PaymentRequestForm";
@@ -10,50 +9,152 @@ import RazorpayPaymentHistory from "../components/RazorpayPaymentHistory";
 export const dynamic = "force-dynamic";
 
 export default async function MerchantDashboard() {
-  // Check whether the merchant is logged in
+  // ==========================================
+  // Check whether merchant is logged in
+  // ==========================================
+
   const session = await getServerSession(authOptions);
 
-  // If the user is not logged in, redirect to the sign-in page
   if (!session?.user?.email) {
     redirect("/api/auth/signin");
   }
 
-  const [transactions, banks, merchants, users] =
-    await Promise.all([
-      prisma.onRampTransaction.findMany({
-        include: {
-          user: true,
-        },
-        orderBy: {
-          startTime: "desc",
-        },
-      }),
+  // ==========================================
+  // Find logged-in merchant
+  // ==========================================
 
-      prisma.bank.findMany({
-        orderBy: {
-          name: "asc",
-        },
-      }),
+  const merchant = await prisma.merchant.findUnique({
+    where: {
+      email: session.user.email,
+    },
+  });
 
-      prisma.merchant.findMany({
-        orderBy: {
-          id: "asc",
-        },
-      }),
+  if (!merchant) {
+    redirect("/api/auth/signin");
+  }
 
-      prisma.user.findMany({
-        include: {
-          Balance: true,
+  // ==========================================
+  // Fetch dashboard data
+  // ==========================================
+
+  const [
+    payments,
+    paymentAttempts,
+    bankAccounts,
+    merchants,
+    users,
+  ] = await Promise.all([
+    // ----------------------------------------
+    // Successful payments received by merchant
+    // ----------------------------------------
+
+    prisma.payment.findMany({
+      where: {
+        merchantId: merchant.id,
+        status: "SUCCESS",
+      },
+
+      include: {
+        User: {
+          select: {
+            name: true,
+            number: true,
+          },
         },
-        orderBy: {
-          id: "asc",
+      },
+
+      orderBy: {
+        createdAt: "desc",
+      },
+    }),
+
+    // ----------------------------------------
+    // Payment Attempts
+    // ----------------------------------------
+
+    prisma.paymentAttempt.findMany({
+      include: {
+        User: {
+          select: {
+            name: true,
+            number: true,
+          },
         },
-      }),
-    ]);
+
+        BankAccount: {
+          select: {
+            bankName: true,
+            maskedAccount: true,
+            provider: true,
+          },
+        },
+      },
+
+      orderBy: {
+        createdAt: "desc",
+      },
+    }),
+
+    // ----------------------------------------
+    // Bank Accounts
+    // ----------------------------------------
+
+    prisma.bankAccount.findMany({
+      include: {
+        User: {
+          select: {
+            name: true,
+            number: true,
+          },
+        },
+      },
+
+      orderBy: {
+        bankName: "asc",
+      },
+    }),
+
+    // ----------------------------------------
+    // All Merchants
+    // ----------------------------------------
+
+    prisma.merchant.findMany({
+      orderBy: {
+        id: "asc",
+      },
+    }),
+
+    // ----------------------------------------
+    // All Users
+    // ----------------------------------------
+
+    prisma.user.findMany({
+      orderBy: {
+        id: "asc",
+      },
+    }),
+  ]);
+
+  // ==========================================
+  // Calculate total received
+  // ==========================================
+
+  const totalReceived = payments.reduce(
+    (total, payment) => total + payment.amount,
+    0
+  );
+
+  // ==========================================
+  // Dashboard
+  // ==========================================
 
   return (
     <div className="min-h-screen bg-slate-50 p-8">
-      {/* Dashboard Header */}
+
+      {/* ========================================
+          Dashboard Header
+      ======================================== */}
+
       <div className="mb-2 flex items-center justify-between">
         <h1 className="text-3xl font-bold text-[#6a51a6]">
           Merchant Dashboard
@@ -63,112 +164,170 @@ export default async function MerchantDashboard() {
       </div>
 
       <p className="mb-8 text-slate-600">
-        Live data from PostgreSQL — on-ramp requests, users,
-        banks, merchants, and Razorpay payments.
+        Live data from PostgreSQL — payments, payment
+        attempts, bank accounts, users, merchants,
+        and Razorpay payments.
       </p>
 
-      {/* Create Payment Request */}
+      {/* ========================================
+          Logged-in Merchant Information
+      ======================================== */}
+
+      <div className="mb-6 rounded-lg border bg-white p-4 shadow-sm">
+        <p className="text-sm text-slate-500">
+          Logged-in Merchant
+        </p>
+
+        <p className="mt-1 text-lg font-semibold">
+          {merchant.name ?? "Merchant"}
+        </p>
+
+        <p className="text-sm text-slate-600">
+          {merchant.email}
+        </p>
+      </div>
+
+      {/* ========================================
+          Summary Cards
+      ======================================== */}
+
+      <div className="mb-10 grid grid-cols-1 gap-4 md:grid-cols-4">
+
+        {/* Merchant Balance */}
+
+        <div className="rounded-lg border bg-white p-5 shadow-sm">
+          <p className="text-sm text-slate-500">
+            Merchant Balance
+          </p>
+
+          <p className="mt-2 text-2xl font-bold text-[#6a51a6]">
+            ₹{merchant.balance.toLocaleString("en-IN")}
+          </p>
+        </div>
+
+        {/* Successful Payments */}
+
+        <div className="rounded-lg border bg-white p-5 shadow-sm">
+          <p className="text-sm text-slate-500">
+            Successful Payments
+          </p>
+
+          <p className="mt-2 text-2xl font-bold text-green-600">
+            {payments.length}
+          </p>
+        </div>
+
+        {/* Total Received */}
+
+        <div className="rounded-lg border bg-white p-5 shadow-sm">
+          <p className="text-sm text-slate-500">
+            Total Received
+          </p>
+
+          <p className="mt-2 text-2xl font-bold text-[#6a51a6]">
+            ₹{totalReceived.toLocaleString("en-IN")}
+          </p>
+        </div>
+
+        {/* Registered Users */}
+
+        <div className="rounded-lg border bg-white p-5 shadow-sm">
+          <p className="text-sm text-slate-500">
+            Registered Users
+          </p>
+
+          <p className="mt-2 text-2xl font-bold text-blue-600">
+            {users.length}
+          </p>
+        </div>
+      </div>
+
+      {/* ========================================
+          Create Payment Request
+      ======================================== */}
+
       <PaymentRequestForm />
 
-      {/* Razorpay Payment History */}
+      {/* ========================================
+          Razorpay Payment History
+      ======================================== */}
+
       <section className="my-10">
         <RazorpayPaymentHistory />
       </section>
 
-      {/* Supported Banks */}
+      {/* ========================================
+          Successful Merchant Payments
+      ======================================== */}
+
       <section className="mb-10">
-        <h2 className="mb-3 text-xl font-semibold">
-          Supported Banks ({banks.length})
-        </h2>
 
-        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
-          {banks.map((bank) => (
-            <div
-              key={bank.id}
-              className="rounded-lg border bg-white p-4 shadow-sm"
-            >
-              <div className="font-medium">
-                {bank.name}
-              </div>
+        <div className="mb-3 flex items-center justify-between">
+          <h2 className="text-xl font-semibold">
+            Successful Merchant Payments (
+            {payments.length})
+          </h2>
 
-              <a
-                href={bank.redirectUrl}
-                className="break-all text-sm text-blue-600 hover:underline"
-                target="_blank"
-                rel="noreferrer"
-              >
-                {bank.redirectUrl}
-              </a>
-            </div>
-          ))}
+          <span className="rounded-full bg-green-100 px-3 py-1 text-sm font-medium text-green-700">
+            Received
+          </span>
         </div>
-      </section>
-
-      {/* On-Ramp Transactions */}
-      <section className="mb-10">
-        <h2 className="mb-3 text-xl font-semibold">
-          On-Ramp Transactions ({transactions.length})
-        </h2>
 
         <div className="overflow-x-auto rounded-lg border bg-white shadow-sm">
           <table className="min-w-full text-sm">
+
             <thead className="bg-slate-100 text-left">
               <tr>
                 <th className="p-3">User</th>
                 <th className="p-3">Phone</th>
-                <th className="p-3">Bank</th>
-                <th className="p-3">Amount (₹)</th>
+                <th className="p-3">Amount</th>
+                <th className="p-3">Payment Method</th>
                 <th className="p-3">Status</th>
-                <th className="p-3">Time</th>
+                <th className="p-3">Payment Time</th>
               </tr>
             </thead>
 
             <tbody>
-              {transactions.length === 0 ? (
+              {payments.length === 0 ? (
                 <tr>
                   <td
                     colSpan={6}
                     className="p-6 text-center text-slate-500"
                   >
-                    No transactions yet
+                    No successful merchant payments yet
                   </td>
                 </tr>
               ) : (
-                transactions.map((transaction) => (
+                payments.map((payment) => (
                   <tr
-                    key={transaction.id}
+                    key={payment.id}
                     className="border-t"
                   >
                     <td className="p-3">
-                      {transaction.user.name ?? "—"}
+                      {payment.User?.name ??
+                        "Unknown User"}
                     </td>
 
                     <td className="p-3">
-                      {transaction.user.number}
+                      {payment.User?.number ?? "—"}
+                    </td>
+
+                    <td className="p-3 font-semibold text-green-600">
+                      ₹{payment.amount.toLocaleString("en-IN")}
                     </td>
 
                     <td className="p-3">
-                      {transaction.provider}
+                      {payment.method ?? "—"}
                     </td>
 
                     <td className="p-3">
-                      ₹
-                      {(
-                        transaction.amount / 100
-                      ).toLocaleString("en-IN", {
-                        minimumFractionDigits: 2,
-                        maximumFractionDigits: 2,
-                      })}
-                    </td>
-
-                    <td className="p-3">
-                      <span className="rounded-full bg-slate-100 px-2 py-1 text-xs font-medium">
-                        {transaction.status}
+                      <span className="rounded-full bg-green-100 px-2 py-1 text-xs font-medium text-green-700">
+                        {payment.status}
                       </span>
                     </td>
 
                     <td className="p-3">
-                      {transaction.startTime.toLocaleString(
+                      {payment.createdAt.toLocaleString(
                         "en-IN"
                       )}
                     </td>
@@ -176,33 +335,183 @@ export default async function MerchantDashboard() {
                 ))
               )}
             </tbody>
+
           </table>
         </div>
       </section>
 
-      {/* Users and Merchants */}
+      {/* ========================================
+          Payment Attempts
+      ======================================== */}
+
+      <section className="mb-10">
+
+        <h2 className="mb-3 text-xl font-semibold">
+          Payment Attempts ({paymentAttempts.length})
+        </h2>
+
+        <div className="overflow-x-auto rounded-lg border bg-white shadow-sm">
+          <table className="min-w-full text-sm">
+
+            <thead className="bg-slate-100 text-left">
+              <tr>
+                <th className="p-3">User</th>
+                <th className="p-3">Phone</th>
+                <th className="p-3">Bank</th>
+                <th className="p-3">Amount</th>
+                <th className="p-3">Provider</th>
+                <th className="p-3">Status</th>
+                <th className="p-3">Time</th>
+              </tr>
+            </thead>
+
+            <tbody>
+              {paymentAttempts.length === 0 ? (
+                <tr>
+                  <td
+                    colSpan={7}
+                    className="p-6 text-center text-slate-500"
+                  >
+                    No payment attempts yet
+                  </td>
+                </tr>
+              ) : (
+                paymentAttempts.map((attempt) => (
+                  <tr
+                    key={attempt.id}
+                    className="border-t"
+                  >
+                    <td className="p-3">
+                      {attempt.User?.name ?? "—"}
+                    </td>
+
+                    <td className="p-3">
+                      {attempt.User?.number ?? "—"}
+                    </td>
+
+                    <td className="p-3">
+                      {attempt.BankAccount?.bankName ?? "—"}
+
+                      {attempt.BankAccount?.maskedAccount
+                        ? ` (${attempt.BankAccount.maskedAccount})`
+                        : ""}
+                    </td>
+
+                    <td className="p-3 font-semibold">
+                      ₹{attempt.amount.toLocaleString("en-IN")}
+                    </td>
+
+                    <td className="p-3">
+                      {attempt.provider}
+                    </td>
+
+                    <td className="p-3">
+                      <span className="rounded-full bg-slate-100 px-2 py-1 text-xs font-medium">
+                        {attempt.status}
+                      </span>
+                    </td>
+
+                    <td className="p-3">
+                      {attempt.createdAt.toLocaleString(
+                        "en-IN"
+                      )}
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+
+          </table>
+        </div>
+      </section>
+
+      {/* ========================================
+          Bank Accounts
+      ======================================== */}
+
+      <section className="mb-10">
+
+        <h2 className="mb-3 text-xl font-semibold">
+          Linked Bank Accounts ({bankAccounts.length})
+        </h2>
+
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
+
+          {bankAccounts.length === 0 ? (
+            <div className="rounded-lg border bg-white p-6 text-slate-500">
+              No bank accounts found
+            </div>
+          ) : (
+            bankAccounts.map((bankAccount) => (
+              <div
+                key={bankAccount.id}
+                className="rounded-lg border bg-white p-4 shadow-sm"
+              >
+
+                <div className="mb-2 font-semibold">
+                  {bankAccount.bankName}
+                </div>
+
+                <div className="text-sm text-slate-600">
+                  Account: {bankAccount.maskedAccount}
+                </div>
+
+                <div className="text-sm text-slate-600">
+                  User: {bankAccount.User?.name ?? "—"}
+                </div>
+
+                <div className="text-sm text-slate-600">
+                  Phone: {bankAccount.User?.number ?? "—"}
+                </div>
+
+                <div className="mt-2">
+                  <span className="rounded-full bg-green-100 px-2 py-1 text-xs font-medium text-green-700">
+                    {bankAccount.status}
+                  </span>
+                </div>
+
+              </div>
+            ))
+          )}
+
+        </div>
+      </section>
+
+      {/* ========================================
+          Users and Merchants
+      ======================================== */}
+
       <div className="grid grid-cols-1 gap-8 lg:grid-cols-2">
-        {/* Users */}
+
+        {/* ======================================
+            Users
+        ====================================== */}
+
         <section>
+
           <h2 className="mb-3 text-xl font-semibold">
             Users ({users.length})
           </h2>
 
           <div className="overflow-x-auto rounded-lg border bg-white shadow-sm">
+
             <table className="min-w-full text-sm">
+
               <thead className="bg-slate-100 text-left">
                 <tr>
                   <th className="p-3">Name</th>
                   <th className="p-3">Phone</th>
-                  <th className="p-3">Balance (₹)</th>
+                  <th className="p-3">Email</th>
+                  <th className="p-3">Balance</th>
                 </tr>
               </thead>
 
               <tbody>
+
                 {users.length === 0 ? (
                   <tr>
                     <td
-                      colSpan={3}
+                      colSpan={4}
                       className="p-6 text-center text-slate-500"
                     >
                       No users found
@@ -214,6 +523,7 @@ export default async function MerchantDashboard() {
                       key={user.id}
                       className="border-t"
                     >
+
                       <td className="p-3">
                         {user.name ?? "—"}
                       </td>
@@ -223,74 +533,91 @@ export default async function MerchantDashboard() {
                       </td>
 
                       <td className="p-3">
-                        ₹
-                        {(
-                          (user.Balance[0]?.amount ?? 0) /
-                          100
-                        ).toLocaleString("en-IN", {
-                          minimumFractionDigits: 2,
-                          maximumFractionDigits: 2,
-                        })}
+                        {user.email ?? "—"}
                       </td>
+
+                      <td className="p-3 font-medium">
+                        ₹{user.balance.toLocaleString("en-IN")}
+                      </td>
+
                     </tr>
                   ))
                 )}
+
               </tbody>
             </table>
           </div>
         </section>
 
-        {/* Merchants */}
+        {/* ======================================
+            Merchants
+        ====================================== */}
+
         <section>
+
           <h2 className="mb-3 text-xl font-semibold">
             Merchants ({merchants.length})
           </h2>
 
           <div className="overflow-x-auto rounded-lg border bg-white shadow-sm">
+
             <table className="min-w-full text-sm">
+
               <thead className="bg-slate-100 text-left">
                 <tr>
                   <th className="p-3">Name</th>
                   <th className="p-3">Email</th>
                   <th className="p-3">Auth</th>
+                  <th className="p-3">Balance</th>
                 </tr>
               </thead>
 
               <tbody>
+
                 {merchants.length === 0 ? (
                   <tr>
                     <td
-                      colSpan={3}
+                      colSpan={4}
                       className="p-6 text-center text-slate-500"
                     >
-                      No merchants — sign in with Google
-                      or run db seed
+                      No merchants found
                     </td>
                   </tr>
                 ) : (
-                  merchants.map((merchant) => (
+                  merchants.map((merchantItem) => (
                     <tr
-                      key={merchant.id}
+                      key={merchantItem.id}
                       className="border-t"
                     >
+
                       <td className="p-3">
-                        {merchant.name ?? "—"}
+                        {merchantItem.name ?? "—"}
                       </td>
 
                       <td className="p-3">
-                        {merchant.email}
+                        {merchantItem.email}
                       </td>
 
                       <td className="p-3">
-                        {merchant.auth_type}
+                        {merchantItem.auth_type}
                       </td>
+
+                      <td className="p-3 font-medium">
+                        ₹
+                        {merchantItem.balance.toLocaleString(
+                          "en-IN"
+                        )}
+                      </td>
+
                     </tr>
                   ))
                 )}
+
               </tbody>
             </table>
           </div>
         </section>
+
       </div>
     </div>
   );

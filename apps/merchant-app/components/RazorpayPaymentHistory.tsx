@@ -1,4 +1,3 @@
-
 "use client";
 
 import { useEffect, useState } from "react";
@@ -23,13 +22,10 @@ export default function RazorpayPaymentHistory() {
       setLoading(true);
       setError("");
 
-      const response = await fetch(
-        "/api/razorpay/payments",
-        {
-          method: "GET",
-          cache: "no-store",
-        }
-      );
+      const response = await fetch("/api/razorpay/payments", {
+        method: "GET",
+        cache: "no-store",
+      });
 
       const data = await response.json();
 
@@ -42,7 +38,6 @@ export default function RazorpayPaymentHistory() {
       setPayments(data.payments);
     } catch (error) {
       console.error("Payment History Error:", error);
-
       setError("Failed to load payment history");
     } finally {
       setLoading(false);
@@ -53,12 +48,19 @@ export default function RazorpayPaymentHistory() {
     fetchPayments();
   }, []);
 
-  const formatAmount = (amount: number | null) => {
+  const formatAmount = (
+    amount: number | null,
+    currency: string
+  ) => {
     if (amount === null) {
       return "N/A";
     }
 
-    return `₹${(amount / 100).toFixed(2)}`;
+    if (currency === "INR") {
+      return `₹${amount.toLocaleString("en-IN")}`;
+    }
+
+    return `${currency} ${amount.toFixed(2)}`;
   };
 
   const formatDate = (date: string) => {
@@ -172,7 +174,10 @@ export default function RazorpayPaymentHistory() {
                   </td>
 
                   <td className="px-4 py-4 font-semibold text-gray-800">
-                    {formatAmount(payment.amount)}
+                    {formatAmount(
+                      payment.amount,
+                      payment.currency
+                    )}
                   </td>
 
                   <td className="px-4 py-4 text-gray-600">

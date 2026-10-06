@@ -3,141 +3,162 @@
 import { getServerSession } from "next-auth";
 import { authOptions } from "../auth";
 import prisma from "@repo/db/client";
+import bcrypt from "bcrypt";
 
 export async function p2pTransfer(
   to: string,
-  amount: number
+  amount: number,
+  pin: string
 ) {
-  const session = await getServerSession(authOptions);
-
-  const from = session?.user?.id;
-
-  if (!from) {
-    return {
-      message: "Please login first",
-    };
-  }
-
-  const fromUserId = Number(from);
-
-  if (!Number.isSafeInteger(fromUserId) || fromUserId <= 0) {
-    return {
-      message: "Invalid logged-in user",
-    };
-  }
-
-  // Validate receiver number
-  const receiverNumber = to?.trim();
-
-  if (!receiverNumber) {
-    return {
-      message: "Please enter receiver number",
-    };
-  }
-
-  // Validate amount
-  if (
-    !Number.isInteger(amount) ||
-    amount <= 0
-  ) {
-    return {
-      message: "Please enter a valid amount",
-    };
-  }
-
-  // Find receiver
-  const toUser = await prisma.user.findFirst({
-    where: {
-      number: receiverNumber,
-    },
-  });
-
-  if (!toUser) {
-    return {
-      message: "Receiver not found",
-    };
-  }
-
-  // Prevent sending money to yourself
-  if (toUser.id === fromUserId) {
-    return {
-      message: "You cannot send money to yourself",
-    };
-  }
-
   try {
+    // 1. Check logged-in user
+    const session = await getServerSession(authOptions);
+
+    const from = session?.user?.id;
+
+    if (!from) {
+      return {
+        message: "Please login first",
+      };
+    }
+
+    const fromUserId = Number(from);
+
+    if (
+      !Number.isSafeInteger(fromUserId) ||
+      fromUserId <= 0
+    ) {
+      return {
+        message: "Invalid logged-in user",
+      };
+    }
+
+    // 2. Validate receiver number
+    const receiverNumber = to?.trim();
+
+    if (!receiverNumber) {
+      return {
+        message: "Please enter receiver mobile number",
+      };
+    }
+
+    // 3. Validate amount
+    if (
+      !Number.isInteger(amount) ||
+      amount <= 0
+    ) {
+      return {
+        message: "Please enter a valid amount",
+      };
+    }
+
+    // 4. Validate PIN
+    if (
+      typeof pin !== "string" ||
+      !/^\d{4,6}$/.test(pin)
+    ) {
+      return {
+        message: "Payment PIN must contain 4 to 6 digits",
+      };
+    }
+
+    // 5. Find receiver
+    const receiver = await prisma.user.findUnique({
+      where: {
+        number: receiverNumber,
+      },
+    });
+
+    if (!receiver) {
+      return {
+        message: "Receiver not found",
+      };
+    }
+
+    // 6. Prevent self transfer
+    if (receiver.id === fromUserId) {
+      return {
+        message: "You cannot send money to yourself",
+      };
+    }
+
+    // 7. Get sender
+    const sender = await prisma.user.findUnique({
+      where: {
+        id: fromUserId,
+      },
+      select: {
+        id: true,
+        balance: true,
+        balancePin: true,
+      },
+    });
+
+    if (!sender) {
+      return {
+        message: "Sender account not found",
+      };
+    }
+
+    // 8. Make sure PIN exists
+    if (!sender.balancePin) {
+      return {
+        message:
+          "Payment PIN is not set. Please set your PIN first.",
+      };
+    }
+
+    // 9. Verify Payment PIN
+    const isPinValid = await bcrypt.compare(
+      pin,
+      sender.balancePin
+    );
+
+    if (!isPinValid) {
+      return {
+        message: "Incorrect Payment PIN",
+      };
+    }
+
+    // 10. Check balance
+    if (sender.balance < amount) {
+      return {
+        message: `Insufficient balance. Available balance: ₹${sender.balance}`,
+      };
+    }
+
+    // 11. Perform complete transfer atomically
     await prisma.$transaction(async (tx) => {
-      /*
-       * Make sure sender has a Balance row.
-       *
-       * This also fixes old users who were created
-       * before Balance creation was added to signup.
-       */
-      const fromBalance = await tx.balance.upsert({
+      // Deduct from sender
+      await tx.user.update({
         where: {
-          userId: fromUserId,
-        },
-        create: {
-          userId: fromUserId,
-          amount: 0,
-          locked: 0,
-        },
-        update: {},
-      });
-
-      /*
-       * Make sure receiver has a Balance row.
-       */
-      await tx.balance.upsert({
-        where: {
-          userId: toUser.id,
-        },
-        create: {
-          userId: toUser.id,
-          amount: 0,
-          locked: 0,
-        },
-        update: {},
-      });
-
-      // Check sender balance
-      if (fromBalance.amount < amount) {
-        throw new Error(
-          `Insufficient balance. Your current balance is ${fromBalance.amount}`
-        );
-      }
-
-      // Deduct money from sender
-      await tx.balance.update({
-        where: {
-          userId: fromUserId,
+          id: fromUserId,
         },
         data: {
-          amount: {
+          balance: {
             decrement: amount,
           },
         },
       });
 
-      // Add money to receiver
-      await tx.balance.update({
+      // Add to receiver
+      await tx.user.update({
         where: {
-          userId: toUser.id,
+          id: receiver.id,
         },
         data: {
-          amount: {
+          balance: {
             increment: amount,
           },
         },
       });
 
-      // Create P2P transfer record
-      await tx.p2pTransfer.create({
+      // Create transaction record
+      await tx.transaction.create({
         data: {
-          fromUserId: fromUserId,
-          toUserId: toUser.id,
-          amount: amount,
-          timestamp: new Date(),
+          senderId: fromUserId,
+          receiverId: receiver.id,
+          amount,
         },
       });
     });
@@ -146,16 +167,11 @@ export async function p2pTransfer(
       message: "Money sent successfully!",
     };
   } catch (error) {
-    console.error(
-      "P2P Transfer Error:",
-      error
-    );
+    console.error("P2P Transfer Error:", error);
 
     return {
       message:
-        error instanceof Error
-          ? error.message
-          : "Something went wrong while sending money",
+        "Something went wrong while processing the transfer",
     };
   }
 }

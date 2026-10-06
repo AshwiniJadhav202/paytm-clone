@@ -1,3 +1,4 @@
+
 generator client {
   provider = "prisma-client-js"
 }
@@ -8,109 +9,140 @@ datasource db {
 }
 
 model User {
-  id                  Int                      @id @default(autoincrement())
-  email               String?                  @unique
-  name                String?
-  number              String                   @unique
-  password            String
-  balancePin          String?
-  Balance             Balance?
-  demoBankAccounts    DemoBankAccount[]
-  paidPaymentRequests MerchantPaymentRequest[] @relation("UserPaymentRequests")
-  OnRampTransaction   OnRampTransaction[]
-  sentTransfers       p2pTransfer[]            @relation("FromUserRelation")
-  receivedTransfers   p2pTransfer[]            @relation("ToUserRelation")
-}
+  id                                          Int                   @id @default(autoincrement())
+  email                                       String?               @unique
+  name                                        String?
+  number                                      String                @unique
+  password                                    String
+  balance                                     Int                   @default(10000)
+  balancePin                                  String?
+  BankAccount                                 BankAccount[]
+  MerchantTransaction                         MerchantTransaction[]
+  MoneyRequest_MoneyRequest_payerIdToUser     MoneyRequest[]        @relation("MoneyRequest_payerIdToUser")
+  MoneyRequest_MoneyRequest_requesterIdToUser MoneyRequest[]        @relation("MoneyRequest_requesterIdToUser")
+  Payment                                     Payment[]
+  PaymentAttempt                              PaymentAttempt[]
+  Transaction_Transaction_receiverIdToUser    Transaction[]         @relation("Transaction_receiverIdToUser")
+  Transaction_Transaction_senderIdToUser      Transaction[]         @relation("Transaction_senderIdToUser")
 
-model Bank {
-  id          Int    @id @default(autoincrement())
-  name        String @unique
-  redirectUrl String
+  // Password Reset
+  passwordResetTokens                         PasswordResetToken[]
 }
 
 model Merchant {
-  id              Int                      @id @default(autoincrement())
-  email           String                   @unique
-  name            String?
-  auth_type       AuthType
-  paymentRequests MerchantPaymentRequest[]
+  id                  Int                   @id @default(autoincrement())
+  email               String                @unique
+  name                String?
+  auth_type           AuthType
+  balance             Int                   @default(0)
+  MerchantTransaction MerchantTransaction[]
+  Payment             Payment[]
 }
 
-model MerchantPaymentRequest {
-  id           Int                  @id @default(autoincrement())
-  merchantId   Int
-  amount       Int
-  description  String?
-  token        String               @unique
-  status       PaymentRequestStatus @default(Pending)
-  createdAt    DateTime             @default(now())
-  paidAt       DateTime?
-  paidByUserId Int?
-  merchant     Merchant             @relation(fields: [merchantId], references: [id])
-  paidByUser   User?                @relation("UserPaymentRequests", fields: [paidByUserId], references: [id])
+model BankAccount {
+  id             Int              @id @default(autoincrement())
+  userId         Int
+  bankName       String
+  maskedAccount  String
+  ifsc           String?
+  provider       String
+  providerRef    String           @unique
+  status         String           @default("ACTIVE")
+  isPrimary      Boolean          @default(false)
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime
+  User           User             @relation(fields: [userId], references: [id])
+  PaymentAttempt PaymentAttempt[]
 }
 
-model OnRampTransaction {
-  id        Int          @id @default(autoincrement())
-  status    OnRampStatus
-  token     String       @unique
-  provider  String
-  amount    Int
-  startTime DateTime
-  userId    Int
-  user      User         @relation(fields: [userId], references: [id])
-}
-
-model p2pTransfer {
+model MerchantTransaction {
   id         Int      @id @default(autoincrement())
+  userId     Int
+  merchantId Int
   amount     Int
-  fromUserId Int
-  toUserId   Int
-  timestamp  DateTime
-  fromUser   User     @relation("FromUserRelation", fields: [fromUserId], references: [id])
-  toUser     User     @relation("ToUserRelation", fields: [toUserId], references: [id])
+  createdAt  DateTime @default(now())
+  Merchant   Merchant @relation(fields: [merchantId], references: [id])
+  User       User     @relation(fields: [userId], references: [id])
 }
 
-model Balance {
-  id     Int  @id @default(autoincrement())
-  userId Int  @unique
-  amount Int
-  locked Int
-  user   User @relation(fields: [userId], references: [id])
+model MoneyRequest {
+  id                                  Int      @id @default(autoincrement())
+  requesterId                         Int
+  payerId                             Int
+  amount                              Int
+  status                              String   @default("PENDING")
+  createdAt                           DateTime @default(now())
+  updatedAt                           DateTime
+  User_MoneyRequest_payerIdToUser     User     @relation("MoneyRequest_payerIdToUser", fields: [payerId], references: [id])
+  User_MoneyRequest_requesterIdToUser User     @relation("MoneyRequest_requesterIdToUser", fields: [requesterId], references: [id])
 }
 
-model DemoBankAccount {
-  id            Int      @id @default(autoincrement())
-  userId        Int
-  bankName      String
-  accountNumber String
-  accountHolder String
-  balance       Int      @default(100000)
-  isVerified    Boolean  @default(false)
-  createdAt     DateTime @default(now())
-  user          User     @relation(fields: [userId], references: [id])
-
-  @@unique([userId, bankName])
+model Payment {
+  id                Int           @id @default(autoincrement())
+  userId            Int?
+  razorpayOrderId   String        @unique
+  razorpayPaymentId String?       @unique
+  amount            Int
+  currency          String        @default("INR")
+  status            PaymentStatus @default(PENDING)
+  method            String?
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime
+  merchantId        Int?
+  Merchant          Merchant?     @relation(fields: [merchantId], references: [id])
+  User              User?         @relation(fields: [userId], references: [id])
 }
 
-model DemoBankTransfer {
-  id            Int          @id @default(autoincrement())
-  userId        Int
-  bankAccountId Int
-  amount        Int
-  status        OnRampStatus @default(Success)
-  token         String       @unique
-  createdAt     DateTime     @default(now())
+model PaymentAttempt {
+  id                Int              @id @default(autoincrement())
+  userId            Int
+  bankAccountId     Int?
+  amount            Int
+  currency          String           @default("INR")
+  provider          String
+  providerPaymentId String?           @unique
+  status            PaymentStatus    @default(PENDING)
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime
+  BankAccount       BankAccount?     @relation(fields: [bankAccountId], references: [id])
+  User              User             @relation(fields: [userId], references: [id])
 }
 
-model RazorpayPayment {
+model Transaction {
+  id                                Int      @id @default(autoincrement())
+  senderId                          Int
+  receiverId                        Int
+  amount                            Int
+  createdAt                         DateTime @default(now())
+  User_Transaction_receiverIdToUser User     @relation("Transaction_receiverIdToUser", fields: [receiverId], references: [id])
+  User_Transaction_senderIdToUser   User     @relation("Transaction_senderIdToUser", fields: [senderId], references: [id])
+}
+
+model WebhookEvent {
   id        Int      @id @default(autoincrement())
-  orderId   String   @unique
-  paymentId String   @unique
-  amount    Int?
-  currency  String   @default("INR")
-  status    String   @default("SUCCESS")
+  provider  String
+  eventId   String   @unique
+  eventType String
+  payload   Json
+  processed Boolean  @default(false)
   createdAt DateTime @default(now())
+}
+
+// =====================================================
+// PASSWORD RESET TOKEN
+// =====================================================
+
+model PasswordResetToken {
+  id        Int      @id @default(autoincrement())
+  userId    Int
+  tokenHash String   @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime @default(now())
+
+  User User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
 }
 
 enum AuthType {
@@ -118,15 +150,8 @@ enum AuthType {
   Github
 }
 
-enum OnRampStatus {
-  Success
-  Failure
-  Processing
-}
-
-enum PaymentRequestStatus {
-  Pending
-  Success
-  Failed
-  Expired
+enum PaymentStatus {
+  PENDING
+  SUCCESS
+  FAILED
 }

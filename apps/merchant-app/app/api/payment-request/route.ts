@@ -1,14 +1,11 @@
-
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
-import crypto from "crypto";
 
 import prisma from "@repo/db/client";
+import razorpay from "../../../lib/razorpay";
 import { authOptions } from "../../../lib/auth";
 
-// ==========================================
-// POST: Create Merchant Payment Request
-// ==========================================
+export const dynamic = "force-dynamic";
 
 export async function POST(req: Request) {
   try {
@@ -17,7 +14,8 @@ export async function POST(req: Request) {
     if (!session?.user?.email) {
       return NextResponse.json(
         {
-          message: "Unauthorized request",
+          success: false,
+          message: "Unauthorized",
         },
         {
           status: 401,
@@ -27,20 +25,17 @@ export async function POST(req: Request) {
 
     const body = await req.json();
 
-    const { amount, description } = body;
+    const amount = Number(body.amount);
+    const description =
+      typeof body.description === "string"
+        ? body.description.trim()
+        : "";
 
-    // Validate amount
-    if (
-      amount === undefined ||
-      amount === null ||
-      typeof amount === "boolean" ||
-      (typeof amount === "string" && amount.trim() === "") ||
-      !Number.isFinite(Number(amount)) ||
-      Number(amount) <= 0
-    ) {
+    if (!Number.isFinite(amount) || amount <= 0) {
       return NextResponse.json(
         {
-          message: "Valid amount is required",
+          success: false,
+          message: "Please provide a valid amount",
         },
         {
           status: 400,
@@ -48,13 +43,12 @@ export async function POST(req: Request) {
       );
     }
 
-    const amountInRupees = Number(amount);
-
-    // Allow maximum ₹1,00,000
-    if (amountInRupees > 100000) {
+    if (amount > 100000) {
       return NextResponse.json(
         {
-          message: "Maximum payment request amount is ₹1,00,000",
+          success: false,
+          message:
+            "Maximum payment request amount is ₹100000",
         },
         {
           status: 400,
@@ -62,9 +56,22 @@ export async function POST(req: Request) {
       );
     }
 
-    const amountInPaise = Math.round(amountInRupees * 100);
+    const amountInRupees = Math.round(amount);
+    const amountInPaise = amountInRupees * 100;
 
-    // Find merchant using logged-in email
+    if (amountInPaise < 100) {
+      return NextResponse.json(
+        {
+          success: false,
+          message: "Minimum payment amount is ₹1",
+        },
+        {
+          status: 400,
+        }
+      );
+    }
+
+    // Find the logged-in merchant
     const merchant = await prisma.merchant.findUnique({
       where: {
         email: session.user.email,
@@ -74,6 +81,7 @@ export async function POST(req: Request) {
     if (!merchant) {
       return NextResponse.json(
         {
+          success: false,
           message: "Merchant account not found",
         },
         {
@@ -82,34 +90,76 @@ export async function POST(req: Request) {
       );
     }
 
-    // Create unique payment request token
-    const token = crypto.randomUUID();
+    // --------------------------------------------------
+    // Create the REAL Razorpay order
+    // --------------------------------------------------
 
-    const paymentRequest = await prisma.merchantPaymentRequest.create({
+    const razorpayOrder = await razorpay.orders.create({
+      amount: amountInPaise,
+      currency: "INR",
+      receipt: `payment_request_${Date.now()}`,
+      notes: {
+        source: "paytm-clone",
+        type: "payment-request",
+        merchantId: String(merchant.id),
+        description: description || "Payment Request",
+      },
+    });
+
+    // --------------------------------------------------
+    // Save the REAL Razorpay order ID in Payment
+    // --------------------------------------------------
+
+    const paymentRequest = await prisma.payment.create({
       data: {
         merchantId: merchant.id,
-        amount: amountInPaise,
-        description:
-          typeof description === "string" &&
-          description.trim().length > 0
-            ? description.trim()
-            : null,
-        token,
-        status: "Pending",
+
+        razorpayOrderId: razorpayOrder.id,
+
+        amount: amountInRupees,
+
+        currency: "INR",
+
+        status: "PENDING",
+
+        updatedAt: new Date(),
       },
     });
 
     return NextResponse.json(
       {
+        success: true,
+
         message: "Payment request created successfully",
+
         paymentRequest: {
           id: paymentRequest.id,
+
+          token: paymentRequest.razorpayOrderId,
+
+          razorpayOrderId:
+            paymentRequest.razorpayOrderId,
+
           amount: paymentRequest.amount,
-          amountInRupees: paymentRequest.amount / 100,
-          description: paymentRequest.description,
-          token: paymentRequest.token,
+
+          amountInRupees:
+            paymentRequest.amount,
+
+          currency: paymentRequest.currency,
+
           status: paymentRequest.status,
-          createdAt: paymentRequest.createdAt,
+
+          description:
+            description || null,
+
+          merchant: {
+            id: merchant.id,
+            name: merchant.name,
+            email: merchant.email,
+          },
+
+          paymentUrl:
+            `/payment-request/${paymentRequest.razorpayOrderId}`,
         },
       },
       {
@@ -117,11 +167,16 @@ export async function POST(req: Request) {
       }
     );
   } catch (error) {
-    console.error("MERCHANT_PAYMENT_REQUEST_ERROR:", error);
+    console.error(
+      "PAYMENT_REQUEST_CREATE_ERROR:",
+      error
+    );
 
     return NextResponse.json(
       {
-        message: "Unable to create payment request",
+        success: false,
+        message:
+          "Unable to create payment request",
       },
       {
         status: 500,
@@ -130,10 +185,6 @@ export async function POST(req: Request) {
   }
 }
 
-// ==========================================
-// GET: Fetch Merchant Payment Request History
-// ==========================================
-
 export async function GET() {
   try {
     const session = await getServerSession(authOptions);
@@ -141,7 +192,8 @@ export async function GET() {
     if (!session?.user?.email) {
       return NextResponse.json(
         {
-          message: "Unauthorized request",
+          success: false,
+          message: "Unauthorized",
         },
         {
           status: 401,
@@ -149,7 +201,6 @@ export async function GET() {
       );
     }
 
-    // Find merchant using logged-in email
     const merchant = await prisma.merchant.findUnique({
       where: {
         email: session.user.email,
@@ -159,6 +210,7 @@ export async function GET() {
     if (!merchant) {
       return NextResponse.json(
         {
+          success: false,
           message: "Merchant account not found",
         },
         {
@@ -167,9 +219,8 @@ export async function GET() {
       );
     }
 
-    // Fetch only this merchant's payment requests
     const paymentRequests =
-      await prisma.merchantPaymentRequest.findMany({
+      await prisma.payment.findMany({
         where: {
           merchantId: merchant.id,
         },
@@ -178,36 +229,59 @@ export async function GET() {
         },
         select: {
           id: true,
+          razorpayOrderId: true,
           amount: true,
-          description: true,
-          token: true,
+          currency: true,
           status: true,
           createdAt: true,
+          updatedAt: true,
         },
       });
 
-    // Convert amount from paise to rupees for frontend
-    const formattedPaymentRequests = paymentRequests.map(
-      (request) => ({
-        id: request.id,
-        amount: request.amount,
-        amountInRupees: request.amount / 100,
-        description: request.description,
-        token: request.token,
-        status: request.status,
-        createdAt: request.createdAt,
-      })
-    );
-
     return NextResponse.json({
-      paymentRequests: formattedPaymentRequests,
+      success: true,
+
+      paymentRequests:
+        paymentRequests.map((request) => ({
+          id: request.id,
+
+          token: request.razorpayOrderId,
+
+          razorpayOrderId:
+            request.razorpayOrderId,
+
+          amount: request.amount,
+
+          amountInRupees:
+            request.amount,
+
+          currency:
+            request.currency,
+
+          status:
+            request.status,
+
+          createdAt:
+            request.createdAt,
+
+          updatedAt:
+            request.updatedAt,
+
+          paymentUrl:
+            `/payment-request/${request.razorpayOrderId}`,
+        })),
     });
   } catch (error) {
-    console.error("MERCHANT_PAYMENT_HISTORY_ERROR:", error);
+    console.error(
+      "PAYMENT_REQUEST_LIST_ERROR:",
+      error
+    );
 
     return NextResponse.json(
       {
-        message: "Unable to fetch payment request history",
+        success: false,
+        message:
+          "Unable to fetch payment requests",
       },
       {
         status: 500,

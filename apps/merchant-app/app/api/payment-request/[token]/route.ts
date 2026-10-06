@@ -1,10 +1,13 @@
 import { NextResponse } from "next/server";
+
 import prisma from "@repo/db/client";
 
+export const dynamic = "force-dynamic";
+
 type RouteContext = {
-  params: Promise<{
+  params: {
     token: string;
-  }>;
+  };
 };
 
 export async function GET(
@@ -12,7 +15,7 @@ export async function GET(
   context: RouteContext
 ) {
   try {
-    const { token } = await context.params;
+    const { token } = context.params;
 
     if (!token) {
       return NextResponse.json(
@@ -25,21 +28,21 @@ export async function GET(
       );
     }
 
-    const paymentRequest =
-      await prisma.merchantPaymentRequest.findUnique({
-        where: {
-          token: token,
-        },
-        include: {
-          merchant: {
-            select: {
-              id: true,
-              name: true,
-              email: true,
-            },
+    const paymentRequest = await prisma.payment.findUnique({
+      where: {
+        razorpayOrderId: token,
+      },
+
+      include: {
+        Merchant: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
           },
         },
-      });
+      },
+    });
 
     if (!paymentRequest) {
       return NextResponse.json(
@@ -52,10 +55,12 @@ export async function GET(
       );
     }
 
-    if (paymentRequest.status !== "Pending") {
+    // Only PENDING requests are active
+    if (paymentRequest.status !== "PENDING") {
       return NextResponse.json(
         {
-          message: "This payment request is no longer active",
+          message:
+            "This payment request is no longer active",
           status: paymentRequest.status,
         },
         {
@@ -74,20 +79,24 @@ export async function GET(
           merchantId: paymentRequest.merchantId,
 
           merchantName:
-            paymentRequest.merchant.name ||
-            paymentRequest.merchant.email,
+            paymentRequest.Merchant?.name ||
+            paymentRequest.Merchant?.email ||
+            "Merchant",
 
-          merchantEmail: paymentRequest.merchant.email,
+          merchantEmail:
+            paymentRequest.Merchant?.email || null,
 
           amount: paymentRequest.amount,
 
-          amountInRupees: paymentRequest.amount / 100,
+          amountInRupees: paymentRequest.amount,
 
-          description: paymentRequest.description,
+          description: null,
 
-          token: paymentRequest.token,
+          token: paymentRequest.razorpayOrderId,
 
           status: paymentRequest.status,
+
+          currency: paymentRequest.currency,
 
           createdAt: paymentRequest.createdAt,
         },

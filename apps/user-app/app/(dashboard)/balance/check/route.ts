@@ -18,11 +18,19 @@ export async function POST(request: Request) {
 
     const userId = Number(session.user.id);
 
+    if (!Number.isSafeInteger(userId) || userId <= 0) {
+      return NextResponse.json(
+        { message: "Invalid user session" },
+        { status: 400 }
+      );
+    }
+
     const user = await prisma.user.findUnique({
       where: {
         id: userId,
       },
       select: {
+        balance: true,
         balancePin: true,
       },
     });
@@ -34,29 +42,31 @@ export async function POST(request: Request) {
       );
     }
 
-    // New user: Balance PIN is not set
+    // Payment/Balance PIN has not been configured yet
     if (!user.balancePin) {
       return NextResponse.json({
         needsPinSetup: true,
       });
     }
 
-   const body = await request.json();
-const pin = String(body.pin || "");
+    const body = await request.json();
+    const pin = String(body?.pin || "").trim();
 
-// Existing user: PIN is required only when checking balance
-if (!pin) {
-  return NextResponse.json({
-    needsPinSetup: false,
-  });
-}
+    // PIN is required to view wallet balance
+    if (!pin) {
+      return NextResponse.json({
+        needsPinSetup: false,
+        requiresPin: true,
+      });
+    }
 
-if (!/^\d{6}$/.test(pin)) {
-  return NextResponse.json(
-    { message: "Please enter a valid 6-digit PIN" },
-    { status: 400 }
-  );
-}
+    // Current application supports 4-6 digit Payment PIN
+    if (!/^\d{4,6}$/.test(pin)) {
+      return NextResponse.json(
+        { message: "Please enter a valid 4 to 6 digit PIN" },
+        { status: 400 }
+      );
+    }
 
     const isPinValid = await bcrypt.compare(
       pin,
@@ -70,18 +80,11 @@ if (!/^\d{6}$/.test(pin)) {
       );
     }
 
-    const balance = await prisma.balance.findFirst({
-      where: {
-        userId: userId,
-      },
-      select: {
-        amount: true,
-      },
-    });
-
+    // Wallet balance is stored directly in User.balance
     return NextResponse.json({
       needsPinSetup: false,
-      balance: balance?.amount || 0,
+      requiresPin: true,
+      balance: user.balance,
     });
   } catch (error) {
     console.error("CHECK_BALANCE_ERROR:", error);

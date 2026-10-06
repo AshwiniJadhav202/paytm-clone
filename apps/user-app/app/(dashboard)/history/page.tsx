@@ -34,71 +34,84 @@ export default async function HistoryPage() {
 
   const userId = Number(session.user.id);
 
+  if (!Number.isSafeInteger(userId) || userId <= 0) {
+    return (
+      <div className="w-full p-8">
+        <h1 className="text-2xl font-bold text-red-600">
+          Invalid user session.
+        </h1>
+      </div>
+    );
+  }
+
+  // Fetch P2P transactions and bank/payment transactions
+  // from the models that actually exist in the current Prisma schema.
   const [p2pTransactions, bankTransactions] =
     await Promise.all([
-      prisma.p2pTransfer.findMany({
+      prisma.transaction.findMany({
         where: {
           OR: [
             {
-              fromUserId: userId,
+              senderId: userId,
             },
             {
-              toUserId: userId,
+              receiverId: userId,
             },
           ],
         },
 
         include: {
-          fromUser: {
+          User_Transaction_senderIdToUser: {
             select: {
               name: true,
               number: true,
             },
           },
 
-          toUser: {
+          User_Transaction_receiverIdToUser: {
             select: {
               name: true,
               number: true,
             },
           },
-        },
-
-        orderBy: {
-          timestamp: "desc",
-        },
-      }),
-
-      prisma.demoBankTransfer.findMany({
-        where: {
-          userId,
         },
 
         orderBy: {
           createdAt: "desc",
         },
+      }),
 
-        select: {
-          id: true,
-          bankAccountId: true,
-          amount: true,
-          status: true,
-          createdAt: true,
+      prisma.paymentAttempt.findMany({
+        where: {
+          userId,
+        },
+
+        include: {
+          BankAccount: {
+            select: {
+              bankName: true,
+              maskedAccount: true,
+              ifsc: true,
+            },
+          },
+        },
+
+        orderBy: {
+          createdAt: "desc",
         },
       }),
     ]);
 
   const transactions = [
-    // =========================
+    // ==========================================
     // P2P TRANSACTIONS
-    // =========================
+    // ==========================================
     ...p2pTransactions.map((transaction) => {
-      const isSent =
-        transaction.fromUserId === userId;
+      const isSent = transaction.senderId === userId;
 
       const otherUser = isSent
-        ? transaction.toUser
-        : transaction.fromUser;
+        ? transaction.User_Transaction_receiverIdToUser
+        : transaction.User_Transaction_senderIdToUser;
 
       return {
         id: `p2p-${transaction.id}`,
@@ -114,40 +127,54 @@ export default async function HistoryPage() {
           : `From: ${otherUser.name || "Unknown User"}`,
 
         number:
-          otherUser.number || "Mobile number unavailable",
+          otherUser.number ||
+          "Mobile number unavailable",
 
         amount: transaction.amount,
 
         isCredit: !isSent,
 
-        status: "Success",
+        status: "SUCCESS",
 
-        date: transaction.timestamp,
+        date: transaction.createdAt,
       };
     }),
 
-    // =========================
-    // BANK TRANSACTIONS
-    // =========================
-    ...bankTransactions.map((transaction) => ({
-      id: `bank-${transaction.id}`,
+    // ==========================================
+    // BANK / ADD MONEY TRANSACTIONS
+    // ==========================================
+    ...bankTransactions.map((transaction) => {
+      const bankName =
+        transaction.BankAccount?.bankName ||
+        "Bank Account";
 
-      type: "BANK",
+      const maskedAccount =
+        transaction.BankAccount?.maskedAccount ||
+        "Account unavailable";
 
-      title: "Money Added",
+      return {
+        id: `bank-${transaction.id}`,
 
-      description: "From Demo Bank",
+        type: "BANK",
 
-      number: `Bank Account #${transaction.bankAccountId}`,
+        title:
+          transaction.status === "SUCCESS"
+            ? "Money Added"
+            : "Add Money",
 
-      amount: transaction.amount,
+        description: `From ${bankName}`,
 
-      isCredit: true,
+        number: maskedAccount,
 
-      status: transaction.status,
+        amount: transaction.amount,
 
-      date: transaction.createdAt,
-    })),
+        isCredit: true,
+
+        status: transaction.status,
+
+        date: transaction.createdAt,
+      };
+    }),
   ].sort(
     (a, b) =>
       b.date.getTime() - a.date.getTime()
@@ -256,7 +283,7 @@ export default async function HistoryPage() {
                   {/* Status */}
                   <p className="mt-1 text-sm text-slate-500">
                     {transaction.status ===
-                    "Success"
+                    "SUCCESS"
                       ? transaction.type ===
                         "BANK"
                         ? "Added to Wallet"

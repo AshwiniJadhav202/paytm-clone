@@ -1,23 +1,12 @@
-
-import { NextRequest, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 import crypto from "crypto";
-import { PrismaClient } from "@prisma/client";
+
+import prisma from "@repo/db/client";
 import razorpay from "../../../../lib/razorpay";
 
-// Prevent creating multiple Prisma connections during development
-const globalForPrisma = globalThis as unknown as {
-  prisma: PrismaClient | undefined;
-};
+export const dynamic = "force-dynamic";
 
-const prisma =
-  globalForPrisma.prisma ??
-  new PrismaClient();
-
-if (process.env.NODE_ENV !== "production") {
-  globalForPrisma.prisma = prisma;
-}
-
-export async function POST(req: NextRequest) {
+export async function POST(req: Request) {
   try {
     const body = await req.json();
 
@@ -27,12 +16,6 @@ export async function POST(req: NextRequest) {
       razorpay_signature,
     } = body;
 
-    console.log("Payment Verification Request:", {
-      orderId: razorpay_order_id,
-      paymentId: razorpay_payment_id,
-    });
-
-    // 1. Validate payment details
     if (
       !razorpay_order_id ||
       !razorpay_payment_id ||
@@ -41,152 +24,375 @@ export async function POST(req: NextRequest) {
       return NextResponse.json(
         {
           success: false,
-          message: "Missing payment verification details",
+          message:
+            "Missing payment verification details",
         },
-        { status: 400 }
+        {
+          status: 400,
+        }
       );
     }
 
-    // 2. Get Razorpay secret key
-    const keySecret = process.env.RAZORPAY_KEY_SECRET;
+    const keySecret =
+      process.env.RAZORPAY_KEY_SECRET;
 
     if (!keySecret) {
-      console.error("Razorpay secret key is missing");
+      console.error(
+        "Razorpay secret key is missing"
+      );
 
       return NextResponse.json(
         {
           success: false,
-          message: "Razorpay secret key is missing",
+          message:
+            "Razorpay secret key is missing",
         },
-        { status: 500 }
+        {
+          status: 500,
+        }
       );
     }
 
-    // 3. Generate expected signature
-    const generatedSignature = crypto
-      .createHmac("sha256", keySecret)
-      .update(
-        `${razorpay_order_id}|${razorpay_payment_id}`
-      )
-      .digest("hex");
+    // --------------------------------------------------
+    // 1. Verify Razorpay signature
+    // --------------------------------------------------
 
-    // 4. Compare signatures
-    // Fixed TypeScript Buffer/timingSafeEqual error
+    const generatedSignature =
+      crypto
+        .createHmac(
+          "sha256",
+          keySecret
+        )
+        .update(
+          `${razorpay_order_id}|${razorpay_payment_id}`
+        )
+        .digest("hex");
+
     const isSignatureValid =
-      generatedSignature === razorpay_signature;
+      generatedSignature ===
+      razorpay_signature;
 
-    console.log("Signature Verification Result:", {
-      isSignatureValid,
-      generatedSignatureLength: generatedSignature.length,
-      receivedSignatureLength: razorpay_signature.length,
-    });
-
-    // 5. Reject invalid signature
     if (!isSignatureValid) {
-      console.error("Invalid Razorpay Signature");
-
       return NextResponse.json(
         {
           success: false,
-          message: "Invalid payment signature",
+          message:
+            "Invalid payment signature",
         },
-        { status: 400 }
+        {
+          status: 400,
+        }
       );
     }
 
-    console.log("Payment signature verified successfully");
+    // --------------------------------------------------
+    // 2. Fetch actual Razorpay order
+    // --------------------------------------------------
 
-    // 6. Fetch actual order details from Razorpay
-    const razorpayOrder = await razorpay.orders.fetch(
-      razorpay_order_id
-    );
+    const razorpayOrder =
+      await razorpay.orders.fetch(
+        razorpay_order_id
+      );
 
-    const amountInPaise = Number(razorpayOrder.amount);
+    const amountInPaise =
+      Number(razorpayOrder.amount);
 
     const currency = String(
       razorpayOrder.currency || "INR"
     );
 
-    console.log("Razorpay Order Details:", {
-      orderId: razorpayOrder.id,
-      amountInPaise,
-      currency,
-    });
-
-    // 7. Validate order amount
     if (
-      !Number.isFinite(amountInPaise) ||
+      !Number.isFinite(
+        amountInPaise
+      ) ||
       amountInPaise <= 0
     ) {
-      console.error("Invalid Razorpay order amount");
+      return NextResponse.json(
+        {
+          success: false,
+          message:
+            "Invalid payment amount",
+        },
+        {
+          status: 400,
+        }
+      );
+    }
+
+    if (currency !== "INR") {
+      return NextResponse.json(
+        {
+          success: false,
+          message:
+            "Unsupported payment currency",
+        },
+        {
+          status: 400,
+        }
+      );
+    }
+
+    const amountInRupees =
+      Math.round(
+        amountInPaise / 100
+      );
+
+    // --------------------------------------------------
+    // 3. Find existing payment request
+    // --------------------------------------------------
+
+    const existingPayment =
+      await prisma.payment.findUnique({
+        where: {
+          razorpayOrderId:
+            razorpay_order_id,
+        },
+      });
+
+    // --------------------------------------------------
+    // 4. Make sure the payment request amount
+    //    matches the Razorpay order amount
+    // --------------------------------------------------
+
+    if (
+      existingPayment &&
+      existingPayment.amount !==
+        amountInRupees
+    ) {
+      console.error(
+        "Payment amount mismatch",
+        {
+          databaseAmount:
+            existingPayment.amount,
+          razorpayAmount:
+            amountInRupees,
+        }
+      );
 
       return NextResponse.json(
         {
           success: false,
-          message: "Invalid payment amount",
+          message:
+            "Payment amount mismatch",
         },
-        { status: 400 }
+        {
+          status: 400,
+        }
       );
     }
 
-    // 8. Save payment in database
-    const payment = await prisma.razorpayPayment.upsert({
-      where: {
-        orderId: razorpay_order_id,
-      },
+    // --------------------------------------------------
+    // 5. Process payment atomically
+    // --------------------------------------------------
 
-      update: {
-        paymentId: razorpay_payment_id,
-        amount: amountInPaise,
-        currency,
-        status: "SUCCESS",
-      },
+    const result =
+      await prisma.$transaction(
+        async (tx) => {
+          const currentPayment =
+            await tx.payment.findUnique({
+              where: {
+                razorpayOrderId:
+                  razorpay_order_id,
+              },
+            });
 
-      create: {
-        orderId: razorpay_order_id,
-        paymentId: razorpay_payment_id,
-        amount: amountInPaise,
-        currency,
-        status: "SUCCESS",
-      },
-    });
+          // --------------------------------------------
+          // Payment already processed
+          // --------------------------------------------
 
-    console.log("Payment saved in database:", {
-      id: payment.id,
-      orderId: payment.orderId,
-      paymentId: payment.paymentId,
-      amount: payment.amount,
-      currency: payment.currency,
-      status: payment.status,
-    });
+          if (
+            currentPayment?.status ===
+            "SUCCESS"
+          ) {
+            return {
+              payment:
+                currentPayment,
+              balanceUpdated: false,
+            };
+          }
 
-    // 9. Return success response
+          // --------------------------------------------
+          // Update existing payment
+          // --------------------------------------------
+
+          let payment;
+
+          if (currentPayment) {
+            payment =
+              await tx.payment.update({
+                where: {
+                  id: currentPayment.id,
+                },
+
+                data: {
+                  razorpayPaymentId:
+                    razorpay_payment_id,
+
+                  amount:
+                    amountInRupees,
+
+                  currency,
+
+                  status: "SUCCESS",
+
+                  method: "RAZORPAY",
+
+                  updatedAt:
+                    new Date(),
+                },
+              });
+          } else {
+            // ------------------------------------------
+            // This supports normal Razorpay payments
+            // which were not created as payment requests.
+            // ------------------------------------------
+
+            payment =
+              await tx.payment.create({
+                data: {
+                  razorpayOrderId:
+                    razorpay_order_id,
+
+                  razorpayPaymentId:
+                    razorpay_payment_id,
+
+                  amount:
+                    amountInRupees,
+
+                  currency,
+
+                  status: "SUCCESS",
+
+                  method: "RAZORPAY",
+
+                  updatedAt:
+                    new Date(),
+                },
+              });
+          }
+
+          // --------------------------------------------
+          // Update merchant balance
+          // --------------------------------------------
+
+          let balanceUpdated = false;
+
+          if (payment.merchantId) {
+            await tx.merchant.update({
+              where: {
+                id: payment.merchantId,
+              },
+
+              data: {
+                balance: {
+                  increment:
+                    amountInRupees,
+                },
+              },
+            });
+
+            balanceUpdated = true;
+          }
+
+          return {
+            payment,
+            balanceUpdated,
+          };
+        }
+      );
+
+    console.log(
+      "Payment processed successfully:",
+      {
+        paymentId:
+          result.payment.id,
+
+        razorpayOrderId:
+          result.payment.razorpayOrderId,
+
+        razorpayPaymentId:
+          result.payment
+            .razorpayPaymentId,
+
+        amount:
+          result.payment.amount,
+
+        merchantId:
+          result.payment.merchantId,
+
+        balanceUpdated:
+          result.balanceUpdated,
+      }
+    );
+
     return NextResponse.json(
       {
         success: true,
-        message: "Payment verified and saved successfully",
+
+        message:
+          result.balanceUpdated
+            ? "Payment verified and merchant balance updated successfully"
+            : "Payment already verified successfully",
 
         payment: {
-          id: payment.id,
-          orderId: payment.orderId,
-          paymentId: payment.paymentId,
-          amount: payment.amount,
-          currency: payment.currency,
-          status: payment.status,
-          createdAt: payment.createdAt,
+          id:
+            result.payment.id,
+
+          orderId:
+            result.payment
+              .razorpayOrderId,
+
+          paymentId:
+            result.payment
+              .razorpayPaymentId,
+
+          amount:
+            result.payment.amount,
+
+          amountInRupees:
+            result.payment.amount,
+
+          currency:
+            result.payment.currency,
+
+          status:
+            result.payment.status,
+
+          method:
+            result.payment.method,
+
+          merchantId:
+            result.payment.merchantId,
+
+          createdAt:
+            result.payment.createdAt,
+
+          updatedAt:
+            result.payment.updatedAt,
         },
+
+        balanceUpdated:
+          result.balanceUpdated,
       },
-      { status: 200 }
+      {
+        status: 200,
+      }
     );
   } catch (error) {
-    console.error("Payment Verification Error:", error);
+    console.error(
+      "Payment Verification Error:",
+      error
+    );
 
     return NextResponse.json(
       {
         success: false,
-        message: "Payment verification failed",
+        message:
+          "Payment verification failed",
       },
-      { status: 500 }
+      {
+        status: 500,
+      }
     );
   }
 }

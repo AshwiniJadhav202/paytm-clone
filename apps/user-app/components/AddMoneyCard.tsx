@@ -3,112 +3,177 @@
 import { Button } from "@repo/ui/button";
 import { Card } from "@repo/ui/card";
 import { Select } from "@repo/ui/select";
-import { useState } from "react";
 import { TextInput } from "@repo/ui/textinput";
-import { createOnRampTransaction } from "../app/lib/actions/createOnrampTransaction";
+import { useState } from "react";
 
 export type BankOption = {
-    name: string;
-    redirectUrl: string;
+    id: number;
+    bankName: string;
+    maskedAccount: string;
+    provider: string;
 };
 
 export const AddMoney = ({ banks }: { banks: BankOption[] }) => {
-    const [redirectUrl, setRedirectUrl] = useState(
-        banks[0]?.redirectUrl ?? ""
+    const [bankAccountId, setBankAccountId] = useState(
+        banks[0]?.id ?? 0
     );
 
-    const [provider, setProvider] = useState(
-        banks[0]?.name ?? ""
-    );
-
-    const [value, setValue] = useState(0);
+    const [amount, setAmount] = useState(0);
+    const [pin, setPin] = useState("");
+    const [loading, setLoading] = useState(false);
 
     if (!banks.length) {
         return (
             <Card title="Add Money">
                 <div className="text-center py-8 text-slate-500">
-                    No banks configured. Run database seed.
+                    No bank account linked.
+                    <br />
+                    Please link a bank account first.
                 </div>
             </Card>
         );
     }
 
+    const selectedBank = banks.find(
+        (bank) => bank.id === bankAccountId
+    );
+
+    async function handleAddMoney() {
+        try {
+            if (!bankAccountId) {
+                alert("Please select a bank account");
+                return;
+            }
+
+            if (!Number.isInteger(amount) || amount <= 0) {
+                alert("Please enter a valid amount");
+                return;
+            }
+
+            if (amount > 100000) {
+                alert("Maximum amount is ₹100000");
+                return;
+            }
+
+            if (!/^\d{6}$/.test(pin)) {
+                alert("Please enter a valid 6-digit Payment PIN");
+                return;
+            }
+
+            setLoading(true);
+
+            const response = await fetch(
+                "/api/demo-bank/add-money",
+                {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json",
+                    },
+                    body: JSON.stringify({
+                        bankAccountId,
+                        amount,
+                        pin,
+                    }),
+                }
+            );
+
+            const result = await response.json();
+
+            if (!response.ok) {
+                alert(result.message || "Unable to add money");
+                return;
+            }
+
+            alert(
+                `₹${result.amount} added successfully!\n\nNew Wallet Balance: ₹${result.balance}`
+            );
+
+            setAmount(0);
+            setPin("");
+
+            /*
+             * Refresh the current page so that the BalanceCard
+             * displays the updated wallet balance and the
+             * transaction list displays the new transaction.
+             */
+            window.location.reload();
+        } catch (error) {
+            console.error("Add Money Error:", error);
+
+            alert(
+                "Something went wrong while adding money"
+            );
+        } finally {
+            setLoading(false);
+        }
+    }
+
     return (
         <Card title="Add Money">
             <div className="w-full">
+
+                {/* Amount */}
                 <TextInput
-                    label={"Amount"}
-                    placeholder={"Amount"}
-                    onChange={(val) => {
-                        setValue(Number(val));
+                    label="Amount"
+                    placeholder="Enter amount"
+                    onChange={(value) => {
+                        setAmount(Number(value));
                     }}
                 />
 
-                <div className="py-4 text-left">
-                    Bank
+                {/* Bank Account */}
+                <div className="py-4 text-left font-medium">
+                    Bank Account
                 </div>
 
                 <Select
                     onSelect={(selectedBank) => {
                         const bank = banks.find(
-                            (x) => x.name === selectedBank
+                            (x) =>
+                                `${x.bankName} - ${x.maskedAccount}` ===
+                                selectedBank
                         );
 
-                        setRedirectUrl(bank?.redirectUrl || "");
-                        setProvider(bank?.name || "");
+                        if (bank) {
+                            setBankAccountId(bank.id);
+                        }
                     }}
-                    options={banks.map((x) => ({
-                        key: x.name,
-                        value: x.name,
+                    options={banks.map((bank) => ({
+                        key: `${bank.bankName} - ${bank.maskedAccount}`,
+                        value: `${bank.bankName} - ${bank.maskedAccount}`,
                     }))}
                 />
 
-                <div className="flex justify-center pt-4">
-                    <Button
-                        onClick={async () => {
-                            try {
-                                if (!provider) {
-                                    alert("Please select a bank");
-                                    return;
-                                }
+                {/* Selected bank details */}
+                {selectedBank && (
+                    <div className="mt-3 rounded-lg bg-slate-50 p-3 text-sm">
+                        <div className="font-semibold">
+                            {selectedBank.bankName}
+                        </div>
 
-                                if (!value || value <= 0) {
-                                    alert("Please enter a valid amount");
-                                    return;
-                                }
+                        <div className="text-slate-500">
+                            Account: {selectedBank.maskedAccount}
+                        </div>
+                    </div>
+                )}
 
-                                const result =
-                                    await createOnRampTransaction(
-                                        provider,
-                                        value
-                                    );
-
-                                if (result.message !== "Done") {
-                                    alert(result.message);
-                                    return;
-                                }
-
-                                if (!redirectUrl) {
-                                    alert(
-                                        "Redirect URL is not available for this bank"
-                                    );
-                                    return;
-                                }
-
-                                window.location.href = redirectUrl;
-                            } catch (error) {
-                                console.error(
-                                    "Add Money Error:",
-                                    error
-                                );
-
-                                alert(
-                                    "Something went wrong while adding money"
-                                );
-                            }
+                {/* Payment PIN */}
+                <div className="pt-4">
+                    <TextInput
+                        label="Payment PIN"
+                        placeholder="Enter 6-digit PIN"
+                        onChange={(value) => {
+                            setPin(value.replace(/\D/g, "").slice(0, 6));
                         }}
+                    />
+                </div>
+
+                {/* Add Money button */}
+                <div className="flex justify-center pt-6">
+                    <Button
+                        onClick={handleAddMoney}
                     >
-                        Add Money
+                        {loading ? "Processing..." : "Add Money"}
                     </Button>
                 </div>
             </div>

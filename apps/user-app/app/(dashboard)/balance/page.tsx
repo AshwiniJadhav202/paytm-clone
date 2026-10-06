@@ -1,4 +1,3 @@
-
 "use client";
 
 import { useEffect, useState } from "react";
@@ -61,20 +60,15 @@ export default function BalancePage() {
       const data = await response.json();
 
       if (
-  data.needsPinSetup ||
-  data.message === "Please set your balance PIN first"
-) {
-  router.replace("/balance/set-pin");
-  return;
-}
-
-if (!response.ok) {
-  setMessage(data.message || "Unable to check balance");
-  return;
-}
-
-      if (data.needsPinSetup) {
+        data.needsPinSetup ||
+        data.message === "Please set your balance PIN first"
+      ) {
         router.replace("/balance/set-pin");
+        return;
+      }
+
+      if (!response.ok) {
+        setMessage(data.message || "Unable to check balance");
         return;
       }
 
@@ -135,7 +129,7 @@ if (!response.ok) {
             </p>
 
             <h2 className="text-2xl font-bold text-green-700">
-              ₹{(balance / 100).toFixed(2)}
+              ₹{balance.toFixed(2)}
             </h2>
           </div>
         )}

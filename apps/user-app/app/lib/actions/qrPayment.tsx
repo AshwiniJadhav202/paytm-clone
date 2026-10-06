@@ -23,6 +23,14 @@ export async function qrPayment(
 
     const fromUserId = Number(senderId);
 
+    // Validate sender ID
+    if (!Number.isSafeInteger(fromUserId) || fromUserId <= 0) {
+        return {
+            success: false,
+            message: "Invalid logged-in user",
+        };
+    }
+
     // Validate receiver ID
     if (!Number.isInteger(receiverId) || receiverId <= 0) {
         return {
@@ -40,7 +48,10 @@ export async function qrPayment(
     }
 
     // Validate PIN
-    if (!/^\d{4,6}$/.test(balancePin)) {
+    if (
+        typeof balancePin !== "string" ||
+        !/^\d{4,6}$/.test(balancePin)
+    ) {
         return {
             success: false,
             message: "PIN must contain 4 to 6 digits",
@@ -60,6 +71,11 @@ export async function qrPayment(
             where: {
                 id: fromUserId,
             },
+            select: {
+                id: true,
+                balance: true,
+                balancePin: true,
+            },
         });
 
         if (!sender) {
@@ -74,6 +90,9 @@ export async function qrPayment(
             where: {
                 id: receiverId,
             },
+            select: {
+                id: true,
+            },
         });
 
         if (!receiver) {
@@ -83,11 +102,11 @@ export async function qrPayment(
             };
         }
 
-        // Verify sender's balance PIN
+        // Verify sender's Payment PIN
         if (!sender.balancePin) {
             return {
                 success: false,
-                message: "Please set your balance PIN first",
+                message: "Please set your Payment PIN first",
             };
         }
 
@@ -99,85 +118,76 @@ export async function qrPayment(
         if (!isPinValid) {
             return {
                 success: false,
-                message: "Incorrect balance PIN",
+                message: "Incorrect Payment PIN",
             };
         }
 
+        /*
+         * Perform the complete QR payment atomically.
+         *
+         * Current database architecture:
+         *
+         * User.balance  -> wallet balance
+         * Transaction   -> P2P transaction history
+         */
         await prisma.$transaction(async (tx) => {
-            // Lock sender balance
-            await tx.$queryRaw`
-                SELECT *
-                FROM "Balance"
-                WHERE "userId" = ${fromUserId}
-                FOR UPDATE
-            `;
+            /*
+             * Deduct money from sender only when enough balance exists.
+             *
+             * This replaces the old Balance model logic:
+             *
+             * OLD:
+             * tx.balance.update(...)
+             *
+             * CURRENT:
+             * tx.user.update(...)
+             */
+            const senderBalanceUpdate =
+                await tx.user.updateMany({
+                    where: {
+                        id: fromUserId,
+                        balance: {
+                            gte: amount,
+                        },
+                    },
+                    data: {
+                        balance: {
+                            decrement: amount,
+                        },
+                    },
+                });
 
-            // Lock receiver balance
-            await tx.$queryRaw`
-                SELECT *
-                FROM "Balance"
-                WHERE "userId" = ${receiverId}
-                FOR UPDATE
-            `;
-
-            // Find sender balance
-            const senderBalance = await tx.balance.findUnique({
-                where: {
-                    userId: fromUserId,
-                },
-            });
-
-            if (!senderBalance) {
-                throw new Error("Sender balance not found");
-            }
-
-            // Check available balance
-            if (senderBalance.amount < amount) {
+            if (senderBalanceUpdate.count !== 1) {
                 throw new Error("Insufficient balance");
             }
 
-            // Find receiver balance
-            const receiverBalance = await tx.balance.findUnique({
+            // Add money to receiver
+            await tx.user.update({
                 where: {
-                    userId: receiverId,
-                },
-            });
-
-            if (!receiverBalance) {
-                throw new Error("Receiver balance not found");
-            }
-
-            // Deduct sender balance
-            await tx.balance.update({
-                where: {
-                    userId: fromUserId,
+                    id: receiverId,
                 },
                 data: {
-                    amount: {
-                        decrement: amount,
-                    },
-                },
-            });
-
-            // Add receiver balance
-            await tx.balance.update({
-                where: {
-                    userId: receiverId,
-                },
-                data: {
-                    amount: {
+                    balance: {
                         increment: amount,
                     },
                 },
             });
 
-            // Create P2P transaction
-            await tx.p2pTransfer.create({
+            /*
+             * Create transaction history.
+             *
+             * Current schema uses Transaction:
+             *
+             * senderId
+             * receiverId
+             * amount
+             * createdAt
+             */
+            await tx.transaction.create({
                 data: {
-                    fromUserId: fromUserId,
-                    toUserId: receiverId,
+                    senderId: fromUserId,
+                    receiverId: receiverId,
                     amount: amount,
-                    timestamp: new Date(),
                 },
             });
         });

@@ -136,6 +136,16 @@ export default function SignInPage() {
             />
           </div>
 
+          {/* Forgot Password */}
+          <div className="text-right">
+            <a
+              href="/forgot-password"
+              className="text-sm font-semibold text-blue-600 hover:underline"
+            >
+              Forgot Password?
+            </a>
+          </div>
+
           {/* Sign In Button */}
           <button
             type="submit"

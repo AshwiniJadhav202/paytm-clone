@@ -1,4 +1,3 @@
-
 "use client";
 
 import { useEffect, useState } from "react";
@@ -6,11 +5,14 @@ import { useEffect, useState } from "react";
 type BankAccount = {
     id: number;
     bankName: string;
-    accountHolder: string;
-    accountNumber: string;
-    balance: number;
-    isVerified: boolean;
+    maskedAccount: string;
+    ifsc: string | null;
+    provider: string;
+    providerRef: string;
+    status: string;
+    isPrimary: boolean;
     createdAt: string;
+    updatedAt: string;
 };
 
 export default function BankPage() {
@@ -31,9 +33,12 @@ export default function BankPage() {
 
             if (response.ok) {
                 setAccounts(data.accounts || []);
+            } else {
+                setMessage(data.message || "Unable to fetch accounts");
             }
         } catch (error) {
             console.error("Fetch accounts error:", error);
+            setMessage("Unable to fetch bank accounts");
         } finally {
             setFetching(false);
         }
@@ -52,51 +57,83 @@ export default function BankPage() {
         setLoading(true);
 
         try {
-            const response = await fetch("/api/demo-bank/link", {
-                method: "POST",
-                headers: {
-                    "Content-Type": "application/json",
-                },
-                body: JSON.stringify({
-                    bankName,
-                    accountNumber,
-                    accountHolder,
-                }),
-            });
+            /*
+             * The API expects:
+             * bankName
+             * maskedAccount
+             * ifsc
+             * provider
+             * providerRef
+             *
+             * We generate the demo values here.
+             */
+
+            const maskedAccount =
+                accountNumber.length > 4
+                    ? `XXXXXX${accountNumber.slice(-4)}`
+                    : accountNumber;
+
+            const providerRef =
+                `DEMO-${accountNumber}-${Date.now()}`;
+
+            const response = await fetch(
+                "/api/demo-bank/link",
+                {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json",
+                    },
+                    body: JSON.stringify({
+                        bankName,
+                        maskedAccount,
+                        provider: "DEMO_BANK",
+                        providerRef,
+                    }),
+                }
+            );
 
             const data = await response.json();
 
             if (!response.ok) {
-                setMessage(data.message || "Something went wrong");
+                setMessage(
+                    data.message ||
+                        "Something went wrong"
+                );
                 return;
             }
 
-            setMessage(data.message);
+            setMessage(
+                data.message ||
+                    "Bank account linked successfully"
+            );
 
             setAccountNumber("");
             setAccountHolder("");
 
             await fetchAccounts();
         } catch (error) {
-            setMessage("Unable to connect to server");
+            console.error(
+                "Link bank account error:",
+                error
+            );
+
+            setMessage(
+                "Unable to connect to server"
+            );
         } finally {
             setLoading(false);
         }
     }
 
-    function formatBalance(balance: number) {
-        return `₹${(balance / 100).toLocaleString("en-IN", {
-            minimumFractionDigits: 2,
-            maximumFractionDigits: 2,
-        })}`;
-    }
-
-    function maskAccountNumber(accountNumber: string) {
-        if (accountNumber.length <= 4) {
-            return accountNumber;
-        }
-
-        return `XXXXXX${accountNumber.slice(-4)}`;
+    function formatDate(date: string) {
+        return new Date(date).toLocaleDateString(
+            "en-IN",
+            {
+                day: "2-digit",
+                month: "short",
+                year: "numeric",
+            }
+        );
     }
 
     return (
@@ -129,28 +166,54 @@ export default function BankPage() {
                                             {account.bankName}
                                         </h2>
 
-                                        <span className="rounded bg-green-100 px-2 py-1 text-sm text-green-700">
-                                            {account.isVerified
-                                                ? "Verified"
-                                                : "Not Verified"}
+                                        <span
+                                            className={`rounded px-2 py-1 text-sm ${
+                                                account.status ===
+                                                "ACTIVE"
+                                                    ? "bg-green-100 text-green-700"
+                                                    : "bg-gray-100 text-gray-700"
+                                            }`}
+                                        >
+                                            {account.status ===
+                                            "ACTIVE"
+                                                ? "Active"
+                                                : account.status}
                                         </span>
                                     </div>
 
                                     <p className="mt-2 text-gray-600">
-                                        {account.accountHolder}
+                                        Demo Bank Account
                                     </p>
 
                                     <p className="text-gray-500">
                                         Account:{" "}
-                                        {maskAccountNumber(
-                                            account.accountNumber
+                                        {account.maskedAccount}
+                                    </p>
+
+                                    {account.ifsc && (
+                                        <p className="text-gray-500">
+                                            IFSC:{" "}
+                                            {account.ifsc}
+                                        </p>
+                                    )}
+
+                                    <p className="mt-2 text-sm text-gray-500">
+                                        Provider:{" "}
+                                        {account.provider}
+                                    </p>
+
+                                    <p className="text-sm text-gray-500">
+                                        Linked:{" "}
+                                        {formatDate(
+                                            account.createdAt
                                         )}
                                     </p>
 
-                                    <p className="mt-3 text-xl font-bold text-blue-600">
-                                        Demo Balance:{" "}
-                                        {formatBalance(account.balance)}
-                                    </p>
+                                    {account.isPrimary && (
+                                        <span className="mt-3 inline-block rounded bg-blue-100 px-2 py-1 text-sm text-blue-700">
+                                            Primary Account
+                                        </span>
+                                    )}
                                 </div>
                             ))}
                         </div>
@@ -164,7 +227,8 @@ export default function BankPage() {
                     </h1>
 
                     <p className="mb-6 text-sm text-gray-500">
-                        This is a demo bank account for testing only.
+                        This is a demo bank account for
+                        testing only.
                     </p>
 
                     <form
@@ -179,7 +243,9 @@ export default function BankPage() {
                             <select
                                 value={bankName}
                                 onChange={(e) =>
-                                    setBankName(e.target.value)
+                                    setBankName(
+                                        e.target.value
+                                    )
                                 }
                                 className="w-full rounded border p-2"
                             >
@@ -202,7 +268,9 @@ export default function BankPage() {
                                 type="text"
                                 value={accountHolder}
                                 onChange={(e) =>
-                                    setAccountHolder(e.target.value)
+                                    setAccountHolder(
+                                        e.target.value
+                                    )
                                 }
                                 placeholder="Enter demo name"
                                 required
@@ -220,7 +288,9 @@ export default function BankPage() {
                                 inputMode="numeric"
                                 value={accountNumber}
                                 onChange={(e) =>
-                                    setAccountNumber(e.target.value)
+                                    setAccountNumber(
+                                        e.target.value
+                                    )
                                 }
                                 placeholder="1234567890"
                                 required

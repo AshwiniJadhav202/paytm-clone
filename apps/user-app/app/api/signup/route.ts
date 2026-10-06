@@ -100,28 +100,16 @@ export async function POST(request: Request) {
       10
     );
 
-    // 6. Create User + Balance together
-    const user = await db.$transaction(async (tx) => {
-      const newUser = await tx.user.create({
-        data: {
-          name,
-          email,
-          number,
-          password: hashedPassword,
-          balancePin: hashedBalancePin,
-        },
-      });
-
-      // Create wallet/balance for the new user
-      await tx.balance.create({
-        data: {
-          userId: newUser.id,
-          amount: 0,
-          locked: 0,
-        },
-      });
-
-      return newUser;
+    // 6. Create User
+    // User.balance automatically gets the Prisma default value.
+    const user = await db.user.create({
+      data: {
+        name,
+        email,
+        number,
+        password: hashedPassword,
+        balancePin: hashedBalancePin,
+      },
     });
 
     return NextResponse.json(

@@ -7,152 +7,238 @@ import prisma from "@repo/db/client";
 import { authOptions } from "../../../lib/auth";
 
 export async function POST(request: Request) {
-  try {
-    const session = await getServerSession(authOptions);
+    try {
+        // 1. Check logged-in user
+        const session = await getServerSession(authOptions);
 
-    if (!session?.user?.id) {
-      return NextResponse.json(
-        { message: "Unauthorized request" },
-        { status: 401 }
-      );
+        if (!session?.user?.id) {
+            return NextResponse.json(
+                {
+                    message: "Unauthorized request",
+                },
+                {
+                    status: 401,
+                }
+            );
+        }
+
+        // 2. Read request body
+        const body = await request.json();
+
+        const bankAccountId = Number(body.bankAccountId);
+        const amountRupees = Number(body.amount);
+        const pin = String(body.pin || "");
+
+        // 3. Validate bank account ID
+        if (
+            !Number.isInteger(bankAccountId) ||
+            bankAccountId <= 0
+        ) {
+            return NextResponse.json(
+                {
+                    message: "Invalid bank account",
+                },
+                {
+                    status: 400,
+                }
+            );
+        }
+
+        // 4. Validate amount
+        if (
+            !Number.isInteger(amountRupees) ||
+            amountRupees <= 0 ||
+            amountRupees > 100000
+        ) {
+            return NextResponse.json(
+                {
+                    message:
+                        "Amount must be between ₹1 and ₹100000",
+                },
+                {
+                    status: 400,
+                }
+            );
+        }
+
+        // 5. Validate 6-digit PIN
+        if (!/^\d{6}$/.test(pin)) {
+            return NextResponse.json(
+                {
+                    message:
+                        "Please enter a valid 6-digit PIN",
+                },
+                {
+                    status: 400,
+                }
+            );
+        }
+
+        // 6. Convert session user ID to number
+        const userId = Number(session.user.id);
+
+        if (
+            !Number.isSafeInteger(userId) ||
+            userId <= 0
+        ) {
+            return NextResponse.json(
+                {
+                    message: "Invalid user",
+                },
+                {
+                    status: 400,
+                }
+            );
+        }
+
+        // 7. Perform the complete operation inside
+        //    a single database transaction
+        const result = await prisma.$transaction(
+            async (tx) => {
+                // -----------------------------------------
+                // Find logged-in user
+                // -----------------------------------------
+                const user = await tx.user.findUnique({
+                    where: {
+                        id: userId,
+                    },
+                    select: {
+                        id: true,
+                        balance: true,
+                        balancePin: true,
+                    },
+                });
+
+                if (!user) {
+                    throw new Error(
+                        "User account not found"
+                    );
+                }
+
+                // -----------------------------------------
+                // Check whether Payment PIN exists
+                // -----------------------------------------
+                if (!user.balancePin) {
+                    throw new Error(
+                        "Please set your balance PIN first"
+                    );
+                }
+
+                // -----------------------------------------
+                // Verify Payment PIN
+                // -----------------------------------------
+                const isPinValid = await bcrypt.compare(
+                    pin,
+                    user.balancePin
+                );
+
+                if (!isPinValid) {
+                    throw new Error("Incorrect PIN");
+                }
+
+                // -----------------------------------------
+                // Find linked bank account
+                // -----------------------------------------
+                const bankAccount =
+                    await tx.bankAccount.findFirst({
+                        where: {
+                            id: bankAccountId,
+                            userId: userId,
+                            status: "ACTIVE",
+                        },
+                        select: {
+                            id: true,
+                            bankName: true,
+                            maskedAccount: true,
+                            provider: true,
+                        },
+                    });
+
+                if (!bankAccount) {
+                    throw new Error(
+                        "Bank account not found or inactive"
+                    );
+                }
+
+                // -----------------------------------------
+                // Add money to wallet
+                //
+                // IMPORTANT:
+                // User.balance is the actual wallet balance
+                // in the current database schema.
+                // -----------------------------------------
+                const updatedUser =
+                    await tx.user.update({
+                        where: {
+                            id: userId,
+                        },
+                        data: {
+                            balance: {
+                                increment: amountRupees,
+                            },
+                        },
+                        select: {
+                            balance: true,
+                        },
+                    });
+
+                // -----------------------------------------
+                // Create payment attempt/history record
+                // -----------------------------------------
+                const providerPaymentId =
+                    `demo_add_money_${crypto.randomUUID()}`;
+
+                await tx.paymentAttempt.create({
+                    data: {
+                        userId: userId,
+                        bankAccountId: bankAccount.id,
+                        amount: amountRupees,
+                        currency: "INR",
+                        provider: "DEMO_BANK",
+                        providerPaymentId:
+                            providerPaymentId,
+                        status: "SUCCESS",
+                        updatedAt: new Date(),
+                    },
+                });
+
+                // -----------------------------------------
+                // Return successful result
+                // -----------------------------------------
+                return {
+                    message:
+                        "Money added to wallet successfully",
+                    amount: amountRupees,
+                    balance: updatedUser.balance,
+                    providerPaymentId:
+                        providerPaymentId,
+                    bank: bankAccount.bankName,
+                    account:
+                        bankAccount.maskedAccount,
+                };
+            }
+        );
+
+        // 8. Send successful response
+        return NextResponse.json(result);
+    } catch (error) {
+        console.error(
+            "ADD_MONEY_ERROR:",
+            error
+        );
+
+        const message =
+            error instanceof Error
+                ? error.message
+                : "Unable to add money";
+
+        return NextResponse.json(
+            {
+                message,
+            },
+            {
+                status: 400,
+            }
+        );
     }
-
-    const body = await request.json();
-
-    const bankAccountId = Number(body.bankAccountId);
-    const amountRupees = Number(body.amount);
-    const pin = String(body.pin || "");
-
-    if (!Number.isInteger(bankAccountId) || bankAccountId <= 0) {
-      return NextResponse.json(
-        { message: "Invalid bank account" },
-        { status: 400 }
-      );
-    }
-
-    if (
-      !Number.isInteger(amountRupees) ||
-      amountRupees <= 0 ||
-      amountRupees > 100000
-    ) {
-      return NextResponse.json(
-        { message: "Amount must be between ₹1 and ₹100000" },
-        { status: 400 }
-      );
-    }
-
-    if (!/^\d{6}$/.test(pin)) {
-      return NextResponse.json(
-        { message: "Please enter a valid 6-digit PIN" },
-        { status: 400 }
-      );
-    }
-
-    const userId = Number(session.user.id);
-    const amountPaise = amountRupees * 100;
-
-    const result = await prisma.$transaction(async (tx) => {
-      const user = await tx.user.findUnique({
-        where: {
-          id: userId,
-        },
-        select: {
-          balancePin: true,
-        },
-      });
-
-      if (!user?.balancePin) {
-        throw new Error("Please set your balance PIN first");
-      }
-
-      const isPinValid = await bcrypt.compare(
-        pin,
-        user.balancePin
-      );
-
-      if (!isPinValid) {
-        throw new Error("Incorrect PIN");
-      }
-
-      const bankAccount = await tx.demoBankAccount.findFirst({
-        where: {
-          id: bankAccountId,
-          userId,
-          isVerified: true,
-        },
-      });
-
-      if (!bankAccount) {
-        throw new Error("Bank account not found");
-      }
-
-      if (bankAccount.balance < amountPaise) {
-        throw new Error("Insufficient bank balance");
-      }
-
-      const bankUpdate = await tx.demoBankAccount.updateMany({
-        where: {
-          id: bankAccountId,
-          userId,
-          balance: {
-            gte: amountPaise,
-          },
-        },
-        data: {
-          balance: {
-            decrement: amountPaise,
-          },
-        },
-      });
-
-      if (bankUpdate.count !== 1) {
-        throw new Error("Unable to debit bank account");
-      }
-
-      await tx.balance.upsert({
-        where: {
-          userId,
-        },
-        update: {
-          amount: {
-            increment: amountPaise,
-          },
-        },
-        create: {
-          userId,
-          amount: amountPaise,
-          locked: 0,
-        },
-      });
-
-      await tx.demoBankTransfer.create({
-        data: {
-          userId,
-          bankAccountId,
-          amount: amountPaise,
-          status: "Success",
-          token: crypto.randomUUID(),
-        },
-      });
-
-      return {
-        amount: amountRupees,
-        message: "Money added to wallet successfully",
-      };
-    });
-
-    return NextResponse.json(result);
-  } catch (error) {
-    console.error("ADD_MONEY_ERROR:", error);
-
-    const message =
-      error instanceof Error
-        ? error.message
-        : "Unable to add money";
-
-    return NextResponse.json(
-      { message },
-      { status: 400 }
-    );
-  }
 }

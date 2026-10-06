@@ -6,6 +6,7 @@ import { p2pTransfer } from "../app/lib/actions/p2pTransfer";
 export function SendCard() {
   const [receiverNumber, setReceiverNumber] = useState("");
   const [amount, setAmount] = useState("");
+  const [pin, setPin] = useState("");
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -14,17 +15,25 @@ export function SendCard() {
 
     const number = receiverNumber.trim();
     const parsedAmount = Number(amount);
+    const paymentPin = pin.trim();
 
     if (!number) {
       setMessage("Please enter receiver mobile number");
       return;
     }
 
-    if (
-      !Number.isInteger(parsedAmount) ||
-      parsedAmount <= 0
-    ) {
+    if (!/^\d{10}$/.test(number)) {
+      setMessage("Please enter a valid 10-digit mobile number");
+      return;
+    }
+
+    if (!Number.isInteger(parsedAmount) || parsedAmount <= 0) {
       setMessage("Please enter a valid amount");
+      return;
+    }
+
+    if (!/^\d{4,6}$/.test(paymentPin)) {
+      setMessage("Payment PIN must contain 4 to 6 digits");
       return;
     }
 
@@ -33,23 +42,19 @@ export function SendCard() {
 
       const result = await p2pTransfer(
         number,
-        parsedAmount
+        parsedAmount,
+        paymentPin
       );
 
       setMessage(result.message);
 
-      if (
-        result.message ===
-        "Money sent successfully!"
-      ) {
+      if (result.message === "Money sent successfully!") {
         setReceiverNumber("");
         setAmount("");
+        setPin("");
       }
     } catch (error) {
-      console.error(
-        "Send money error:",
-        error
-      );
+      console.error("Send money error:", error);
 
       setMessage(
         "Something went wrong while sending money"
@@ -88,16 +93,17 @@ export function SendCard() {
             type="tel"
             value={receiverNumber}
             onChange={(e) =>
-              setReceiverNumber(e.target.value)
+              setReceiverNumber(e.target.value.replace(/\D/g, ""))
             }
-            placeholder="Enter mobile number"
+            placeholder="Enter 10-digit mobile number"
+            maxLength={10}
             disabled={loading}
             className="w-full rounded-lg border border-slate-300 px-4 py-3 text-slate-800 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100 disabled:bg-slate-100"
           />
         </div>
 
         {/* Amount */}
-        <div className="mb-6">
+        <div className="mb-5">
           <label
             htmlFor="amount"
             className="mb-2 block text-sm font-medium text-slate-700"
@@ -116,9 +122,7 @@ export function SendCard() {
               min="1"
               step="1"
               value={amount}
-              onChange={(e) =>
-                setAmount(e.target.value)
-              }
+              onChange={(e) => setAmount(e.target.value)}
               placeholder="Enter amount"
               disabled={loading}
               className="w-full rounded-lg border border-slate-300 py-3 pl-9 pr-4 text-slate-800 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100 disabled:bg-slate-100"
@@ -126,12 +130,39 @@ export function SendCard() {
           </div>
         </div>
 
+        {/* Payment PIN */}
+        <div className="mb-6">
+          <label
+            htmlFor="pin"
+            className="mb-2 block text-sm font-medium text-slate-700"
+          >
+            Payment PIN
+          </label>
+
+          <input
+            id="pin"
+            type="password"
+            inputMode="numeric"
+            value={pin}
+            onChange={(e) =>
+              setPin(e.target.value.replace(/\D/g, ""))
+            }
+            placeholder="Enter 4-6 digit PIN"
+            maxLength={6}
+            disabled={loading}
+            className="w-full rounded-lg border border-slate-300 px-4 py-3 text-slate-800 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100 disabled:bg-slate-100"
+          />
+
+          <p className="mt-2 text-xs text-slate-500">
+            Enter the Payment PIN you created during signup.
+          </p>
+        </div>
+
         {/* Message */}
         {message && (
           <div
             className={`mb-5 rounded-lg border px-4 py-3 text-sm ${
-              message ===
-              "Money sent successfully!"
+              message === "Money sent successfully!"
                 ? "border-green-200 bg-green-50 text-green-700"
                 : "border-red-200 bg-red-50 text-red-700"
             }`}
@@ -147,9 +178,7 @@ export function SendCard() {
           disabled={loading}
           className="w-full rounded-lg bg-blue-600 px-4 py-3 font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
         >
-          {loading
-            ? "Sending..."
-            : "Send Money"}
+          {loading ? "Sending..." : "Send Money"}
         </button>
 
       </div>
